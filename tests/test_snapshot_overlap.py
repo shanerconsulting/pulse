@@ -180,6 +180,35 @@ def test_tz_naive_meeting_normalized_to_local():
     print("  PASS  TZ: naive meeting datetimes normalized without blowup")
 
 
+
+# ============================================================================
+# ALL-DAY EVENTS (#74) — Google returns a date-only start/end for an all-day
+# event. Each day it spans counts as one working day, not 24 hours.
+# ============================================================================
+
+def all_day(bp: tuple, start: str, end: str) -> dict:
+    return {"bucket_path": list(bp), "start": start, "end": end}
+
+
+def test_all_day_event_counts_as_workday():
+    out = run(pb_sessions={}, meetings=[all_day(A, "2026-05-29", "2026-05-30")])
+    assert_close(out, {"Acme": 480.0, "Acme.Alpha": 480.0}, "all-day single")
+
+
+def test_multi_day_all_day_event_counts_each_day():
+    window = (datetime(2026, 5, 28, 0, 0, tzinfo=LOCAL_TZ), datetime(2026, 5, 31, 0, 0, tzinfo=LOCAL_TZ))
+    out = run(pb_sessions={}, meetings=[all_day(A, "2026-05-28", "2026-05-31")], window=window)
+    assert_close(out, {"Acme": 1440.0, "Acme.Alpha": 1440.0}, "all-day x3")
+
+
+def test_all_day_event_merges_with_same_bucket_timed_meeting():
+    out = run(pb_sessions={}, meetings=[
+        all_day(A, "2026-05-29", "2026-05-30"),
+        meet(A, D(8, 0), D(10, 0)),   # an hour before the workday, an hour inside it
+    ])
+    assert_close(out, {"Acme": 540.0, "Acme.Alpha": 540.0}, "all-day + timed")
+
+
 if __name__ == "__main__":
     failing_tests = [
         test_mode1_same_bucket_session_inside_meeting,
