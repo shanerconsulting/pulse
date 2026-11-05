@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-CACHE_VERSION = 3  # bump to invalidate every cached extract when the IR shape changes (v3: +cwd, #71)
+CACHE_VERSION = 4  # bump to invalidate every cached extract when the IR shape changes (v3: +cwd, #71; v4: +app_session, #73)
 
 
 def iso_to_dt(s):
@@ -44,7 +44,7 @@ def classify_category(first_entry, filepath):
     if filepath and "/subagents/" in str(filepath):
         return "subagent"
     t = (first_entry or {}).get("type")
-    if t == "queue-operation":
+    if t == "queue-operation" and not (first_entry or {}).get("app_session"):
         return "headless"
     return "interactive"
 
@@ -55,9 +55,13 @@ def extract_session(filepath):
     This is the cacheable half of the old ``parse_session``: it does the expensive
     read + json.loads and pre-extracts each entry's evidence, but applies NO window
     (the window moves every run and is applied cheaply in ``aggregate_session``).
-    Returns ``{"first_type", "cwd", "entries": [...]}`` or ``None`` if the file
+    Returns ``{"first_type", "app_session", "cwd", "entries": [...]}`` or ``None`` if the file
     is unreadable/gone (caller drops it — same as the old parse returning None).
     ``cwd`` (#71, cache v3) is the first non-sidechain cwd seen, pre-window.
+    ``app_session`` (#73, cache v4) is True when the file holds a line only the
+    Claude desktop app writes (bridge-session / custom-title). App sessions open
+    with a queue-operation line just like scripted ``claude -p`` runs, so this is
+    what keeps them interactive.
 
     Text and bash commands are truncated to the same [:500]/[:300] bounds the old
     parser used, so nothing beyond what sessions.json already holds is cached (#8).
@@ -65,6 +69,7 @@ def extract_session(filepath):
     first_type = None
     first_seen = False
     cwd = None
+    app_session = False
     entries = []
     try:
         with open(filepath, "r") as f:
@@ -86,6 +91,8 @@ def extract_session(filepath):
                     # worktree segments. Sidechain (subagent) entries can
                     # record a different directory; skip them.
                     cwd = e["cwd"]
+                if e.get("type") in ("bridge-session", "custom-title"):
+                    app_session = True
                 ts = iso_to_dt(e.get("timestamp"))
                 if ts is None:
                     continue
@@ -138,7 +145,7 @@ def extract_session(filepath):
                 entries.append(rec)
     except Exception:
         return None
-    return {"first_type": first_type, "cwd": cwd, "entries": entries}
+    return {"first_type": first_type, "app_session": app_session, "cwd": cwd, "entries": entries}
 
 
 def aggregate_session(filepath, extracted, window_start, window_end):
@@ -190,7 +197,8 @@ def aggregate_session(filepath, extracted, window_start, window_end):
     if not timestamps:
         return None
 
-    category = classify_category({"type": extracted["first_type"]}, filepath)
+    category = classify_category(
+        {"type": extracted["first_type"], "app_session": extracted.get("app_session")}, filepath)
     timestamps.sort()
     duration_min = 0.0
     prev = timestamps[0]

@@ -226,3 +226,42 @@ def test_cache_version_bumped_for_cwd_field():
     # v2 IRs have no cwd; reusing them would silently disable the raw-cwd
     # cascade for every cached session. The version bump forces a re-parse.
     assert scan_sessions.CACHE_VERSION >= 3
+
+
+# --- #73: Claude desktop app sessions are interactive -------------------------
+# Every desktop-app session opens with a queue-operation line, the same first-line
+# type a scripted `claude -p` run has. The app also writes bridge-session /
+# custom-title lines, which scripted runs never do; that is the discriminator.
+# (entrypoint is not: a `claude -p` spawned inside an app session inherits it.)
+
+def _queued(base, entries, extra_types=()):
+    head = [{"type": "queue-operation", "operation": "enqueue",
+             "timestamp": _iso(base - timedelta(seconds=1)), "sessionId": "s"}]
+    tail = [{"type": t, "sessionId": "s"} for t in extra_types]
+    return head + entries + tail
+
+
+def _category(tmp_path, name, entries, base):
+    p = _write_session(tmp_path / "enc" / name, entries)
+    ir = scan_sessions.extract_session(p)
+    out = scan_sessions.aggregate_session(p, ir, base - timedelta(hours=1), base + timedelta(hours=1))
+    return out["category"]
+
+
+def test_desktop_app_session_is_interactive(tmp_path):
+    base = datetime(2026, 10, 30, 9, 0, 0)
+    for marker in ("bridge-session", "custom-title"):
+        entries = _queued(base, _session_entries(base), extra_types=(marker,))
+        assert _category(tmp_path, f"app-{marker}.jsonl", entries, base) == "interactive"
+
+
+def test_scripted_queue_session_stays_headless(tmp_path):
+    base = datetime(2026, 10, 30, 9, 0, 0)
+    entries = _queued(base, _session_entries(base))
+    for e in entries:
+        e["entrypoint"] = "claude-desktop"   # inherited from a parent app session
+    assert _category(tmp_path, "scripted.jsonl", entries, base) == "headless"
+
+
+def test_cache_version_bumped_for_app_session_field():
+    assert scan_sessions.CACHE_VERSION >= 4

@@ -47,6 +47,7 @@ GAP_MINUTES = 15   # tighter than /deploy-week's 30-min default — widget is a
                    # "I opened a session at 9 and came back at 9:25" as 25 min
                    # of continuous activity. 15 min only counts real thinking
                    # pauses between turns, not coffee breaks.
+ALL_DAY_HOURS = (9, 17)  # an all-day calendar event counts as this local workday, per day (#74)
 WEEKS_PER_MONTH = 4.33
 
 
@@ -238,9 +239,10 @@ def _meeting_intervals_per_bucket(
 ) -> dict[tuple, list[tuple[datetime, datetime]]]:
     """Returns {bucket_path_tuple: [(clipped_start, clipped_end), ...]}.
 
-    Normalizes naive datetimes (all-day events) to local_tz and clips to the
-    window. Returns intervals (not scalars) so they can participate in the
-    same sweep-line as session intervals.
+    Normalizes naive datetimes to local_tz and clips to the window. An all-day
+    event (Google's date-only start/end) becomes one ALL_DAY_HOURS workday per
+    day it spans, not 24h (#74). Returns intervals (not scalars) so they can
+    participate in the same sweep-line as session intervals.
     """
     out: dict[tuple, list[tuple[datetime, datetime]]] = {}
     for m in meetings:
@@ -248,6 +250,17 @@ def _meeting_intervals_per_bucket(
             m_start = datetime.fromisoformat(m["start"])
             m_end = datetime.fromisoformat(m["end"])
         except (KeyError, ValueError):
+            continue
+        if "T" not in m["start"]:
+            bp = tuple(m["bucket_path"])
+            day = m_start.date()
+            while day < m_end.date():
+                d0 = datetime(day.year, day.month, day.day, ALL_DAY_HOURS[0], tzinfo=local_tz)
+                d1 = datetime(day.year, day.month, day.day, ALL_DAY_HOURS[1], tzinfo=local_tz)
+                s, e = max(d0, start), min(d1, end)
+                if e > s:
+                    out.setdefault(bp, []).append((s, e))
+                day += timedelta(days=1)
             continue
         if m_start.tzinfo is None:
             m_start = m_start.replace(tzinfo=local_tz)

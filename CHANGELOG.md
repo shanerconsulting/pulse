@@ -36,6 +36,16 @@ All notable changes to Pulse are documented here. Format follows
   hand-confirmed): 7 refined, 2 to the LLM, everything else unchanged (#57)
 
 ### Fixed
+- Claude desktop app sessions now count. Every app session opens with a
+  `queue-operation` line, which the scanner read as a scripted (headless) run, so
+  prematch dropped it and it contributed zero hours. The scanner now records whether
+  a session holds a line only the app writes (`bridge-session` / `custom-title`) and
+  keeps those interactive; scripted `claude -p` runs, even ones launched from inside
+  an app session, stay headless. Scan cache bumped to v4, so the first run after
+  updating re-parses history once (#73)
+- All-day calendar events no longer count as 24 hours. A date-only event now counts
+  as one 09:00–17:00 local workday per day it spans, and still merges with timed
+  meetings and sessions in the same bucket (#74)
 - File-evidence poisoning by catch-all global dirs: a registry claim that is exactly
   `~/.claude/skills` or `~/.claude/projects` no longer counts as file evidence
   (every session touches those dirs as a side effect, so such claims silently pulled
