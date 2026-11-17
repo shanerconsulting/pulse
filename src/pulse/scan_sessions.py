@@ -21,12 +21,12 @@ caller's cache path, are never logged, and are gitignored.
 Usage:
   python3 scan_sessions.py --start 2026-04-13T08:00:00 --end 2026-04-20T11:22:00 --out data/sessions.json
 """
-import argparse, json, os, sys
+import argparse, json, os, re, sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-CACHE_VERSION = 4  # bump to invalidate every cached extract when the IR shape changes (v3: +cwd, #71; v4: +app_session, #73)
+CACHE_VERSION = 5  # bump to invalidate every cached extract when the IR shape changes (v3: +cwd, #71; v4: +app_session, #73; v5: texts cleaned of reminders and expanded skills before the cut)
 
 
 def iso_to_dt(s):
@@ -114,7 +114,7 @@ def extract_session(filepath):
                                     texts.append(c.get("text") or "")
                     rec["is_tool_result"] = is_tool_result
                     rec["mid"] = msg.get("id") or e.get("uuid")   # None → noid fallback at aggregate
-                    rec["texts"] = [t[:500] for t in texts]
+                    rec["texts"] = [t[:500] for t in (_strip_reminders(x) for x in texts) if t]
                 elif typ == "assistant":
                     rec["mid"] = msg.get("id") or e.get("uuid")
                     usage = msg.get("usage") or {}
@@ -148,6 +148,35 @@ def extract_session(filepath):
     return {"first_type": first_type, "app_session": app_session, "cwd": cwd, "entries": entries}
 
 
+# Harness notes (linked-session lists, skill listings) arrive inside a user turn as
+# <system-reminder> blocks. They are not what the person typed, and a linked-session
+# list names every client at once, so a session started from a multi-client thread
+# read as "several clients" and its first_msg (cut at 180 chars) lost the real
+# command. Drop them before anything is read from the text.
+_REMINDER_RE = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.S)
+
+
+_SKILL_HEAD_RE = re.compile(r"\ABase directory for this skill: (\S+)")
+_SKILL_ARGS_RE = re.compile(r"\n\s*ARGUMENTS:\s*(.*)\Z", re.S)
+
+
+def _strip_reminders(text):
+    """Clean one user text: drop reminder blocks, and collapse an expanded skill.
+
+    A skill started from another session is logged as its whole SKILL.md body with
+    "ARGUMENTS: <args>" at the very end, so the args fell past the 500-char cut and
+    the body's own examples (client names, paths) read as the session's subject.
+    Collapse it to "/<skill> <args>", what the person actually asked for.
+    """
+    text = _REMINDER_RE.sub("", text).strip()
+    head = _SKILL_HEAD_RE.match(text)
+    if head:
+        args = _SKILL_ARGS_RE.search(text)
+        name = head.group(1).rstrip("/").rsplit("/", 1)[-1]
+        text = f"/{name} {args.group(1).strip() if args else ''}".strip()
+    return text
+
+
 def aggregate_session(filepath, extracted, window_start, window_end):
     """Apply the rolling window to an extracted IR → the session dict (or None).
 
@@ -176,7 +205,9 @@ def aggregate_session(filepath, extracted, window_start, window_end):
                 if mid not in user_msg_ids:
                     user_msg_ids.add(mid)
                     for t in rec["texts"]:
-                        text_parts.append(t[:500])
+                        t = _strip_reminders(t)
+                        if t:
+                            text_parts.append(t[:500])
         elif typ == "assistant":
             mid = rec["mid"]
             if mid and mid in seen_asst_ids:
