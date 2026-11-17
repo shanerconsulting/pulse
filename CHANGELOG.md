@@ -5,6 +5,14 @@ All notable changes to Pulse are documented here. Format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Session text no longer counts harness notes or pasted skill bodies. User turns are
+  cleaned of `<system-reminder>` blocks (e.g. the linked-sessions list, which names
+  every sibling session at once) and an expanded skill is collapsed to
+  `/<skill> <args>` before the 500-char cut. Sessions started from another session
+  used to keep only the reminder or the skill's own examples in `first_msg` and
+  `text_blob`, so their real subject (the skill's arguments) was lost. Scan cache v5:
+  the first run after updating re-parses history once.
 ### Changed
 - Launch-dir cascade now uses the session's raw cwd (newly captured in the scan
   cache, v3 — first run after updating re-parses history once): worktree-launched
